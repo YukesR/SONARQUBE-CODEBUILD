@@ -1,0 +1,58 @@
+version: 0.2
+
+phases:
+  pre_build:
+    commands:
+      - echo "Installing dependencies..."
+      - yum install -y unzip wget jq
+      - echo "Downloading and installing SonarScanner..."
+      - wget https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-4.2.0.1873-linux.zip
+      - unzip sonar-scanner-cli-4.2.0.1873-linux.zip
+      - mv sonar-scanner-4.2.0.1873-linux /opt/sonar-scanner
+      - chmod +x /opt/sonar-scanner/bin/sonar-scanner
+
+  build:
+    commands:
+      - echo "Starting build phase on $(date)"
+      - echo "Waiting for SonarQube analysis to complete..."
+      - sleep 10  # Adjust sleep time as necessary for your project
+
+      - |
+        echo "Running SonarQube analysis..."
+        /opt/sonar-scanner/bin/sonar-scanner \
+          -Dsonar.projectKey="$SONAR_PROJECT_KEY" \
+          -Dsonar.sources="." \
+          -Dsonar.host.url="$SONAR_HOST_URL" \
+          -Dsonar.login="$SONAR_LOGIN_TOKEN" || { echo "SonarScanner execution failed."; exit 1; }
+
+      - echo "Waiting for SonarQube analysis to complete..."
+      - sleep 10  # Adjust sleep time as necessary for your project
+
+      - |
+        echo "Checking SonarQube quality gate status..."
+        RESPONSE=$(curl -s -u "$SONAR_LOGIN_TOKEN:" "$SONAR_HOST_URL/api/qualitygates/project_status?projectKey=$SONAR_PROJECT_KEY") || { echo "Failed to fetch quality gate status."; exit 1; }
+
+        echo "Response: $RESPONSE"  # Print the raw response for debugging
+        echo "$RESPONSE" > /tmp/result.json
+
+        SONAR_RESULT=$(echo "$RESPONSE" | jq -r '.projectStatus.status')
+        echo "SonarQube quality gate status: $SONAR_RESULT"
+
+        # Detailed breakdown of conditions
+        jq '.projectStatus.conditions[]' /tmp/result.json
+
+        # Fail the build if quality gate status is ERROR
+        if [ "$SONAR_RESULT" = "ERROR" ]; then
+          echo "SonarQube quality gate failed. Failing the build...";
+          exit 1;
+        else
+          echo "SonarQube quality gate passed. Continuing the build...";
+        fi
+
+  post_build:
+    commands:
+      - echo "Build completed on $(date)"
+
+artifacts:
+  files:
+    - '**/*'
